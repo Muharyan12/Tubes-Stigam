@@ -9,8 +9,6 @@ from game.logic.random import RandomLogic
 from game.util import *
 from game.logic.base import BaseLogic
 from game.logic.stigam import Stigam
-from game.logic.awi import MyBot
-from game.logic.NotUnderstand import NotUnderstand
 
 init()
 BASE_URL = "http://localhost:3000/api"
