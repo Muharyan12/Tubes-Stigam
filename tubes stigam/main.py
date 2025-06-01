@@ -1,109 +1,209 @@
-# Import library standar dan eksternal
-import argparse  # Untuk membaca argumen dari command line
-from time import sleep  # Untuk membuat jeda (delay) antar iterasi loop
+import argparse
+from time import sleep
 
-# Import untuk menampilkan warna di terminal (agar output lebih menarik)
 from colorama import Back, Fore, Style, init
+from game.api import Api
+from game.board_handler import BoardHandler
+from game.bot_handler import BotHandler
+from game.logic.random import RandomLogic
+from game.util import *
+from game.logic.base import BaseLogic
+from game.logic.stigam import Stigam
 
-# Import modul internal dari folder 'game'
-from game.api import Api  # Untuk komunikasi dengan server game (backend API)
-from game.board_handler import BoardHandler  # Menangani dan menampilkan papan permainan
-from game.bot_handler import BotHandler  # Menangani interaksi bot (mengambil status, kirim langkah)
-from game.logic.random import RandomLogic  # Bot logic acak (tidak digunakan langsung di sini)
-from game.util import *  # Fungsi utilitas umum
-from game.logic.base import BaseLogic  # Kelas dasar logika bot
-from game.logic.stigam import Stigam  # Bot dengan strategi khusus bernama Stigam
-
-# Inisialisasi Colorama agar bisa menggunakan warna di terminal
 init()
-
-# URL server backend tempat game dijalankan
 BASE_URL = "http://localhost:3000/api"
-
-# ID papan default
 DEFAULT_BOARD_ID = 1
-
-# Dictionary yang berisi daftar bot logic yang tersedia
-# Bisa ditambahkan bot lain di sini jika dikembangkan
 CONTROLLERS = {
-    "Stigam": Stigam  # Menggunakan logika bot dari class Stigam
+    "Stigam": Stigam
 }
 
-# ============================================================================
-# Bagian ini untuk parsing (membaca) argumen dari terminal/command line
-# ============================================================================
-
+###############################################################################
+#
+# Parse command line arguments
+#
+###############################################################################
 parser = argparse.ArgumentParser(description="Diamonds example bot")
-
-# Menentukan dua argumen yang saling eksklusif: menggunakan token ATAU registrasi dengan nama baru
 group = parser.add_mutually_exclusive_group()
 group.add_argument(
-    "--token",  # Token digunakan jika bot sudah pernah terdaftar
-    help="Token bot yang sudah terdaftar",
+    "--token",
+    help="A bot token to use when running using an existing bot",
     action="store",
 )
-group.add_argument(
-    "--name",  # Nama digunakan untuk registrasi bot baru
-    help="Nama bot baru untuk registrasi",
-    action="store"
+group.add_argument("--name", help="The name of the bot to register", action="store")
+parser.add_argument("--email", help="The email of the bot to register", action="store")
+parser.add_argument(
+    "--password", help="The password of the bot to register", action="store"
 )
-
-# Argumen tambahan
-parser.add_argument("--email", help="Email untuk registrasi bot", action="store")
-parser.add_argument("--board", help="ID papan permainan", type=int, default=DEFAULT_BOARD_ID)
-parser.add_argument("--controller", help="Nama controller (bot logic) yang digunakan", default="Stigam")
-
-# Eksekusi parsing argumen
+parser.add_argument("--team", help="The team of the bot to register", action="store")
+parser.add_argument(
+    "--board", help="Id of the board to join", default=DEFAULT_BOARD_ID, action="store"
+)
+parser.add_argument(
+    "--time-factor",
+    help="A factor to multiply each move command with. If you want to run the bot in a slower mode e.g. use --time-factor=5 to multiply each delay with 5.",
+    default=1,
+    action="store",
+)
+parser.add_argument(
+    "--logic",
+    help="The logic controller to use. Valid options are: {}".format(
+        ", ".join(list(CONTROLLERS.keys()))
+    ),
+    action="store",
+)
+group = parser.add_argument_group("API connection")
+group.add_argument(
+    "--host", action="store", default=BASE_URL, help="Default: {}".format(BASE_URL)
+)
 args = parser.parse_args()
 
-# ============================================================================
-# Inisialisasi koneksi ke API dan login/registrasi bot
-# ============================================================================
+time_factor = int(args.time_factor)
+api = Api(args.host)
+bot_handler = BotHandler(api)
+board_handler = BoardHandler(api)
 
-# Membuat objek API dengan base URL
-api = Api(BASE_URL)
+###############################################################################
+#
+# (Try and) Register a new bot if we have not supplied a token
+#
+###############################################################################
+if not args.token:
+    recovered_token = bot_handler.recover(args.email, args.password)
+    args.token = recovered_token
+    if not recovered_token:
+        bot = bot_handler.register(args.name, args.email, args.password, args.team)
+        if bot:
+            print("")
+            print(
+                Style.BRIGHT
+                + "Bot registered. Token: {}".format(bot.id)
+                + Style.RESET_ALL
+            )
+            args.token = bot.id
+        else:
+            print(
+                Fore.RED
+                + Style.BRIGHT
+                + "Error: "
+                + Style.RESET_ALL
+                + "Unable to register bot"
+            )
+            exit(1)
 
-# Menentukan token bot
-if args.token:
-    # Jika token diberikan, gunakan token tersebut
-    token = args.token
+###############################################################################
+#
+# Setup bot using token and play game
+#
+###############################################################################
+bot = bot_handler.get_my_info(args.token)
+logic_controller = args.logic
+if logic_controller not in CONTROLLERS:
+    print(
+        Fore.RED
+        + Style.BRIGHT
+        + "Error: "
+        + Style.RESET_ALL
+        + "Invalid logic controller"
+    )
+    exit(1)
+
+if not bot.name:
+    print(Fore.RED + Style.BRIGHT + "Error: " + Style.RESET_ALL + "Bot does not exist")
+    exit(1)
+print(Fore.BLUE + Style.BRIGHT + "Welcome back, " + Style.RESET_ALL + bot.name)
+
+# Setup variables
+logic_class = CONTROLLERS[logic_controller]
+bot_logic: BaseLogic = logic_class()
+
+###############################################################################
+#
+# Find a board to join
+#
+###############################################################################
+current_board_id = int(args.board)
+
+if not current_board_id:
+    # List active boards to find one we can join if we haven't specified one
+    boards = board_handler.list_boards()
+    for board in boards:
+        # Try to join board
+        board_joined = False
+        current_board_id = board.id
+        success = bot_handler.join(bot.id, current_board_id)
+        if success:
+            board_joined = True
+            break
+
+    if not board_joined:
+        exit()
 else:
-    # Jika tidak, maka lakukan registrasi bot baru
-    bot = api.register_bot(args.name, args.email)
-    token = bot["token"]
+    # Try to join the one we specified
+    success = bot_handler.join(bot.id, current_board_id)
+    if not success:
+        current_board_id = None
 
-# ============================================================================
-# Menjalankan game (looping)
-# ============================================================================
+# Did we manage to join a board?
+if not current_board_id:
+    print(
+        Fore.RED
+        + Style.BRIGHT
+        + "Error: "
+        + Style.RESET_ALL
+        + "Unable to find any boards to join"
+    )
+    exit(1)
 
-# Ambil class controller (logika bot) dari dictionary CONTROLLERS
-controller_class = CONTROLLERS[args.controller]
-controller = controller_class()  # Buat objek controller
+###############################################################################
+#
+# Prepare state from current board
+#
+###############################################################################
+board = board_handler.get_board(current_board_id)
+move_delay = board.minimum_delay_between_moves / 1000
 
-# Inisialisasi handler papan dan handler bot
-board_handler = BoardHandler()
-bot_handler = BotHandler(api, token, args.board)
-
-# Tampilkan informasi koneksi bot
-print(Fore.GREEN + f"Bot berhasil terhubung ke papan {args.board}" + Style.RESET_ALL)
-
-# Mulai game loop
+###############################################################################
+#
+# Game play loop
+#
+###############################################################################
 while True:
-    # Ambil status game terbaru dari API
-    game = bot_handler.get_game_status()
+    # Find our info among the bots on the board
+    board_bot = board.get_bot(bot)
+    if not board_bot:
+        # Managed to get game over
+        break
 
-    # Tampilkan papan ke terminal
-    board_handler.display(game)
+    # Calculate next move
+    delta_x, delta_y = bot_logic.next_move(board_bot, board)
+    # delta_x, delta_y = (1, 0)
+    if not board.is_valid_move(board_bot.position, delta_x, delta_y):
+        print(
+            Fore.YELLOW + Style.BRIGHT + "Warn:" + Style.RESET_ALL,
+            "Invalid move will be ignored."
+            + f" Your move: ({delta_x}, {delta_y}). Your position: ({board_bot.position.x}, {board_bot.position.y})",
+        )
+        sleep(1)
+        continue
 
-    # Jika giliran bot untuk bermain
-    if bot_handler.should_move(game):
-        # Tentukan langkah berdasarkan logic dari controller (AI bot)
-        move = controller.move(game)
+    try:
+        # Try to perform move
+        board = bot_handler.move(bot.id, current_board_id, delta_x, delta_y)
+    except Exception as e:
+        break
 
-        # Kirim langkah ke server (API)
-        bot_handler.send_move(move)
+    if not board:
+        # Read new board state
+        board = board_handler.get_board(current_board_id)
 
-    # Jeda 1 detik sebelum iterasi berikutnya
+    # Get new state
+    board_bot = board.get_bot(bot)
+    if not board_bot:
+        # Managed to get game over after move
+        break
+
+    # Don't spam the board more than it allows!
+    # sleep(move_delay * time_factor)
     sleep(1)
 
 
