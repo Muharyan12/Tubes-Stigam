@@ -1,6 +1,5 @@
 import random
 from typing import Optional, List, Tuple
-
 from game.logic.base import BaseLogic
 from game.models import GameObject, Board, Position
 from game.util import clamp
@@ -193,8 +192,12 @@ class Stigam(BaseLogic):
 
         time_left = getattr(bot.properties, "milliseconds_left", 20000)
 
+        #algoritma greedynya
+
+        #kalau waktu hampir habis dan ada diamond di inventori atau inventory penuh
         if (time_left < 10000 and bot.properties.diamonds > 0) or bot.properties.diamonds == 5:
             self.goal_position = base_pos
+        #jika ada bot lawan disekitar, car diamond yang jauh dari bot lawan
         elif self.is_object_in_area(bot.position, enemy_positions, 2):
             goal_candidate = self.bot_process(bot, enemy_positions, diamond_positions, diamonds, base_pos)
             self.goal_position = goal_candidate if goal_candidate else self.goal_position
@@ -203,22 +206,27 @@ class Stigam(BaseLogic):
                 red_button_pos = red_buttons_pos[0]
             else:
                 red_button_pos = Position(-1, -1)
+            #pilih diamond yang menguntungkan berdasar jarak
             self.diamond_process(base_pos, diamonds, diamond_positions, bot, red_button_pos)
 
+        #gunakan teleport kalau  ada untungnya
         if (self.goal_position and len(teleports_pos) == 2 and
             self.get_distance_with_portal_and_base(bot.position, teleports_pos[0], teleports_pos[1], self.goal_position, base_pos) <
             self.distance(bot.position, self.goal_position) + self.distance(self.goal_position, base_pos)):
             self.goal_position = teleports_pos[0]
 
+        #untuk menuju ke goal positionnya
         if self.goal_position and self.goal_position != Position(-1, -1):
             delta_x, delta_y = self.get_direction_v2(bot.position.x, bot.position.y, self.goal_position.x, self.goal_position.y)
-            cur_plus_portal = Position(bot.position.x + delta_x, bot.position.y + delta_y)
+            #untuk menghindari teleport kalau bukal goal positionny
+            current_plus_portal = Position(bot.position.x + delta_x, bot.position.y + delta_y)
             if (len(teleports_pos) == 2 and
                 self.goal_position != teleports_pos[0] and
-                cur_plus_portal == teleports_pos[0]):
+                current_plus_portal == teleports_pos[0]):
                 self.goal_position = self.dodge_teleport(bot.position, teleports_pos[0], teleports_pos[1], self.goal_position)
                 delta_x, delta_y = self.get_direction_v2(bot.position.x, bot.position.y, self.goal_position.x, self.goal_position.y)
         else:
+            #kalau nggk punya tujuan, jalan random
             delta = self.directions[self.current_direction]
             delta_x, delta_y = delta[0], delta[1]
             if random.random() > 0.6:
